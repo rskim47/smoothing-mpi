@@ -7,9 +7,9 @@ using namespace std;
 
 
 void initialize(float* x, long n, long m){
-	// Initializing Random Array - (n x m) 
-	for(int i = 0; i < n; i++) {
-		for(int j = 0; j < m; j++) {
+	// Initializing Internal Random Array
+	for(int i = 0; i < n + 2; i++) {
+		for(int j = 0; j < m + 2; j++) {
 		  x[INDEX(i,j,m)] = 1.0 * rand()/RAND_MAX; 
 		}
 	}
@@ -57,7 +57,7 @@ int main(int argc, char* argv[]){
 	
 	MPI_Comm comm_cart;
 	MPI_Status status;
-	MPI_Request resquest; 
+	MPI_Request request; 
 
 	
 	// =================================== Tile Dimensions ===================================
@@ -107,6 +107,7 @@ int main(int argc, char* argv[]){
 	// MPI_Type_commit(&init_array);
 
 	// ==================================== X & Y Allocation ====================================
+	// Allocation made for all tasks.
 	start = get_wall_time();
 	x = (float *) malloc( nbound * mbound * sizeof(float));
 	time_alloc_x = get_wall_time() - start; 
@@ -117,14 +118,25 @@ int main(int argc, char* argv[]){
 
 	// ================================= Array Intialization =================================
 	// Scheme 1 : Every MPI tasks initializes its own array
-	start = get_wall_time();
-	initialize(x,nbound,mbound); 
-	time_initialize = get_wall_time() - start; 
+	if (nrank != 1){
+		if (rank == 0) {
+			start = get_wall_time();
+			for (int i = 1; i < nranks; i++) { 
+				initialize(x,nbound,mbound); 																// Creating Array
+				ierr = MPI_Isend(&x[0], nbound*mbound ,MPI_FLOAT,i, 1, comm_old, &request);
+				ierr = MPI_recv(&x[0], nbound*mbound, MPI_FLOAT, 0, 1, comm_old, &request);
+				ierr = MPI_Wait(&request,&statusus);
+			}
+			time_initialize = get_wall_time() - start; 
+		}
+	} else {
+		printf("THe number of tasks is below 2");
+	}
+
 
 	// ================================= Moving Rows & Columns =================================
 	// Create Cartesian Topology 
 	// tdim: Tile dimension, pdim: periodicity 
-	printf("heello");
 	int dim[2] = {n,m};
 	int pdim[2] = {0,0};
 	ierr = MPI_Cart_create(comm_old,2,dim,pdim,0,&comm_cart);
@@ -134,19 +146,14 @@ int main(int argc, char* argv[]){
 	 // Coordinates of each rank in Cartesian Topology
 	int coordinates[2];
 	ierr = MPI_Cart_coords(comm_cart,rank,2,coordinates);
-	printf("heello1");
 	ierr = MPI_Cart_rank(comm_cart,coordinates,&rank);
 	//printf("Rank %d : %d x %d",rank,coordinates[0],coordinates[1]);
-	printf("heello2");
 
 	// MPI Type for Column Transfers (Vector)
 	float col_recv[nbound]; 
 	MPI_Datatype n_col;
 	MPI_Type_vector(nbound,1,mbound,MPI_FLOAT,&n_col);  	 // Column Vectors for column movement
 	MPI_Type_commit(&n_col);
-
-	MPI_Request req; 
-	MPI_Status stat;
 
 	// ================================== Cartesian Shift ==================================
 	// Setting Cartesian source & receive of ranks (src_{action}, dest_{action}
@@ -162,34 +169,35 @@ int main(int argc, char* argv[]){
 	// ================================= Transferring Data =================================
 	// Row Up ===========================================================================
 	if (dest_up != -1) {
-		ierr = MPI_Isend(&x[0], mbound, MPI_FLOAT, dest_up, 1, comm_old, &req);
-		MPI_Wait(&req, &stat);
+		ierr = MPI_Isend(&x[0], mbound, MPI_FLOAT, dest_up, 1, comm_old, &request);
+		MPI_Wait(&request, &status);
 	}
 
 	if (src_up != -1) {
-		ierr = MPI_Irecv(&x[INDEX(nbound,0,mbound)], mbound, MPI_FLOAT, src_up, 1, comm_old, &req);
-		MPI_Wait(&req,&stat);
+		ierr = MPI_Irecv(&x[INDEX(nbound,0,mbound)], mbound, MPI_FLOAT, src_up, 1, comm_old, &request);
+		MPI_Wait(&request,&status);
 	}
 
 	// Row Down ===========================================================================
 	if (dest_down != -1) {
-		ierr = MPI_Isend(&x[INDEX(nbound,0,mbound)],mbound, MPI_FLOAT, dest_down, 1, comm_old, &req);
-		MPI_Wait(&req, &stat);
+		ierr = MPI_Isend(&x[INDEX(nbound,0,mbound)],mbound, MPI_FLOAT, dest_down, 1, comm_old, &request);
+		MPI_Wait(&request, &status);
 	}
 
 	if (src_down != -1) {
-		ierr = MPI_Irecv(&x[0], mbound, MPI_FLOAT, src_down, 1, comm_old, &req);
-		MPI_Wait(&req, &stat);
+		ierr = MPI_Irecv(&x[0], mbound, MPI_FLOAT, src_down, 1, comm_old, &request);
+		MPI_Wait(&request, &status);
 	}
 
 	// Column Left ========================================================================
 	if (dest_left != -1) {
-		ierr = MPI_Isend(&x[nbound+1], 1, n_col, dest_left, 1, comm_old, &req);
+		ierr = MPI_Isend(&x[nbound+1], 1, n_col, dest_left, 1, comm_old, &request);
+		ierr = MPI_Wait(&request,&status);
 	}
 
 	if (src_left != -1) {
-		ierr = MPI_Irecv(&col_recv[0], nbound, MPI_FLOAT, src_left, 1, comm_old, &req);
-		MPI_Wait(&req, &stat);
+		ierr = MPI_Irecv(&col_recv[0], nbound, MPI_FLOAT, src_left, 1, comm_old, &request);
+		MPI_Wait(&request, &status);
 		// Inserting received in Position 
 		for (int i = (2*mbound)-1, j = 0; i < mbound*(mbound-1); i += mbound, j++) {
 			x[i] = col_recv[j];
@@ -198,12 +206,12 @@ int main(int argc, char* argv[]){
 
 	// Column Right =======================================================================
 	if (dest_right != -1) {
-		ierr = MPI_Isend(&x[(2*mbound-2)], 1, n_col, dest_right, 1, comm_old, &req);
+		ierr = MPI_Isend(&x[(2*mbound-2)], 1, n_col, dest_right, 1, comm_old, &request);
 	}
 
 	if (src_right != -1) {
-		ierr = MPI_Irecv(&col_recv[0], nbound, MPI_FLOAT, src_right, 1, comm_old, &req);
-		MPI_Wait(&req, &stat);
+		ierr = MPI_Irecv(&col_recv[0], nbound, MPI_FLOAT, src_right, 1, comm_old, &request);
+		MPI_Wait(&request, &status);
 		for (int i = mbound, j = 0; i < mbound*(nbound-1); i += mbound, j++) {
 			x[i] = col_recv[j];
 		}
@@ -221,6 +229,7 @@ int main(int argc, char* argv[]){
 	start = get_wall_time();
 	count(x,nbound, mbound, t, count_x);
 	time_count_x = get_wall_time() - start; 
+	ierr = MPI_Barrier(comm_old);
 
 	start = get_wall_time();
 	count(x,nbound, mbound, t, count_y);
@@ -229,6 +238,7 @@ int main(int argc, char* argv[]){
 	// Adding up all local counts -> global counts 
 	MPI_Reduce(&elem_count_x,&count_x,nranks ,MPI_INT, MPI_SUM, 0, comm_old);
 	MPI_Reduce(&elem_count_y,&count_y,nranks ,MPI_INT, MPI_SUM, 0, comm_old);
+	ierr = MPI_Barrier(comm_old);
 
 	// ======================================= Output ==========================================
 	// Output by thread 0
