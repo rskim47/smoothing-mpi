@@ -23,7 +23,7 @@ void smooth(float* x, float* y, long n, long m, float a, float b, float c){
 	}	
 }
 
-void count(float* array, long n, long m, float t, double &count) {
+void count(float* array, long n, long m, float t, long long &count) {
   int i,j;
   for(i = 1; i < n + 1 ; ++i){
 		for(j = 1; j < m + 1; ++j){
@@ -57,12 +57,12 @@ int main(int argc, char* argv[]){
 	// * Preference given to a Square-Arrangment
 	int n, m;  
 	float taskTemp = sqrt(nranks);
-	printf("Sqrt value %g \n",taskTemp);
+	//printf("Sqrt value %g \n",taskTemp);
 	if (fmod(taskTemp,1.0) == 0 && nranks != 2) {
 		n = (int)taskTemp;
 		m = n;
 	} else {
-		printf("Numer of Tasks is not a square %g\n",ceil(nranks / 2.0));
+		//printf("Numer of Tasks is not a square %g\n",ceil(nranks / 2.0));
 		for (float i = 2.0; i < ceil(nranks / 2.0) ; i = i + 1.0) {
 			taskTemp = nranks / i;
 			if (fmod(taskTemp,1.0) == 0) {
@@ -71,14 +71,13 @@ int main(int argc, char* argv[]){
 			}
 		}
 	}
-	printf("Task Tile Arrangement:  %d x %d\n", n,m);
-	
+	if (rank == 0 ){ printf("Task Tile Arrangement:  %d x %d\n", n,m);}
 	ierr = MPI_Barrier(comm);
 
 	// Creating Size of Each Tile
-	long total_size = 98306;
-	long n_size = total_size / n; 
-	long m_size = total_size / m;
+	long total_size = 10000;
+	long n_size = 15810; 
+	long m_size = 15810;
 
 	// Individual Tile Dimensions 
 	long nbound = n_size + 2; 
@@ -92,7 +91,7 @@ int main(int argc, char* argv[]){
 	float *x, *y;
 	float a = 0.0, b = 0.2, c = 0.2, t = 0.5;    
 	double start,time_initialize,time_smooth,time_count_x,time_count_y,time_alloc_x,time_alloc_y;
-	double count_x, count_y, elem_count_x, elem_count_y;
+	long long *count_x, *count_y, *elem_count_x, *elem_count_y;
 
 	// ================================= Global Data Array (MPI) =================================
 	// MPI_Datatype init_array; 
@@ -110,23 +109,23 @@ int main(int argc, char* argv[]){
 
 	// ================================== Array Intialization ===================================
 	// Rank = Sends a Random Array of Numbers 
-	// if (nranks != 1){
-	// 	if (rank == 0) {
-	// 		printf("Sending x array to tasks\n");
-	// 		start = get_wall_time();
-	// 		for (int i = 1; i < nranks; i++) { 
-	// 			initialize(x,nbound,mbound); 																
-	// 			ierr = MPI_Isend(&x[0],1000,MPI_FLOAT,i, 1, comm, &request);
-	// 			printf("sent to %d \n",i);
-	// 		}
-	// 		time_initialize = get_wall_time() - start; 
-	// 	}
-	// } else {
-	// 	printf("THe number of tasks is below 2\n");
-	// }
-	// ierr = MPI_Barrier(comm);
-	// ierr = MPI_Irecv(&x[0], 1000, MPI_FLOAT, 0, 1, comm, &request);
-	// printf("%d received \n",rank);
+	 if (nranks != 1){
+	 	if (rank == 0) {
+	 		printf("Sending x array to tasks\n");
+	 		start = get_wall_time();
+	 		for (int i = 1; i < nranks; i++) { 
+	 			initialize(x,nbound,mbound); 																
+	 			ierr = MPI_Isend(&x[0],1000,MPI_FLOAT,i, 1, comm, &request);
+	 			printf("sent to %d \n",i);
+	 		}
+	time_initialize = get_wall_time() - start; 
+		}
+	} else {
+		printf("THe number of tasks is below 2\n");
+	}
+	ierr = MPI_Barrier(comm);
+	ierr = MPI_Irecv(&x[0], 1000, MPI_FLOAT, 0, 1, comm, &request);
+	printf("%d received \n",rank);
 	
 	// ================================= Moving Rows & Columns =================================
 	// Create Cartesian Topology 
@@ -148,10 +147,10 @@ int main(int argc, char* argv[]){
 	printf("Rank: %d (original: %d) : (%d,%d) \n",rank,rank2d,coordinates[0],coordinates[1]);
 
 	// MPI Type for Column Transfers (Vector)
-	float col_recv[nbound]; 
-	MPI_Datatype n_col;
-	MPI_Type_vector(nbound,1,mbound,MPI_FLOAT,&n_col);  	 // Column Vectors for column movement
-	MPI_Type_commit(&n_col);
+	float col_recv[nbound], col_send[nbound];
+	// MPI_Datatype n_col;
+	// MPI_Type_vector(nbound,1,mbound,MPI_FLOAT,&n_col);  	 // Column Vectors for column movement
+	// MPI_Type_commit(&n_col);
 
 	// ================================== Cartesian Shift ==================================
 	// Setting Cartesian source & receive of ranks (src_{action}, dest_{action}
@@ -189,41 +188,48 @@ int main(int argc, char* argv[]){
 	}
 
 	if (src_down != -1) {
-		ierr = MPI_Irecv(&x[0], mbound, MPI_FLOAT, src_down, 1, comm, &request);
+		ierr = MPI_Irecv(&col_recv[0], mbound, MPI_FLOAT, src_down, 1, comm, &request);
 		MPI_Wait(&request, &status);
 	}
 
 	// Column Left ========================================================================
-	printf("Column left: %d\n",rank);
+	printf("Sending Column left: %d\n",rank);
 	if (dest_left != -1) {
-		ierr = MPI_Isend(&x[0], nbound, n_col, dest_left, 1, comm, &request);
+		for (int i = 0; i < nbound; i++) {
+			col_send[i] = x[INDEX(i,0,mbound)];
+		}
+		ierr = MPI_Isend(&col_send[0], nbound, MPI_FLOAT, dest_left, 1, comm, &request);
 		ierr = MPI_Wait(&request,&status);
 	}
 
+		printf("Receiving col left %d\n",rank);	
 	if (src_left != -1) {
 		ierr = MPI_Irecv(&col_recv[0], nbound, MPI_FLOAT, src_left, 1, comm, &request);
 		MPI_Wait(&request, &status);
 		// Inserting received in Position 
 		for (int i = 0; i < nbound; i++) {
-			x[INDEX(i,0,mbound)] = col_recv[i];
+			x[INDEX(i,mbound-1,mbound)] = col_recv[i];
 		}
 	}
 	
 	// Column Right =======================================================================
 	printf("Column right: %d\n",rank);
 	if (dest_right != -1) {
-		ierr = MPI_Isend(&x[nbound,0,mbound-1], nbound, n_col, dest_right, 1, comm, &request);
+		for (int i = 0; i < nbound; i++) {
+			col_send[i] = x[INDEX(i,mbound-1,mbound)];
+		}
+		ierr = MPI_Isend(&x[0], nbound, MPI_FLOAT, dest_right, 1, comm, &request);
+		ierr = MPI_Wait(&request,&status);
 	}
 
 	if (src_right != -1) {
 		ierr = MPI_Irecv(&col_recv[0], nbound, MPI_FLOAT, src_right, 1, comm, &request);
-		MPI_Wait(&request, &status);
+		ierr = MPI_Wait(&request, &status);
 		for (int i = 0; i < nbound; i++) {
-			x[INDEX(i,mbound-1,mbound)] = col_recv[i];
+			x[INDEX(i,0,mbound)] = col_recv[i];
 		}
 	}
-	printf("transfer finished %d",rank);
-	ierr = MPI_Barrier(comm);
+	printf("transfer finished %d \n",rank);
 
 	// ====================================== Smoothing ======================================
 	// Smoothing Function (Serial)
@@ -234,21 +240,22 @@ int main(int argc, char* argv[]){
 	ierr = MPI_Barrier(comm);
 
 	// ====================================== Counting =======================================
-	printf("Counting X: %d\n",rank);
+	printf("Counting X: %d \n",rank);
 	start = get_wall_time();
 	count(x,nbound, mbound, t, count_x);
 	time_count_x = get_wall_time() - start; 
-	ierr = MPI_Barrier(comm);
 
-	printf("Counting Y: %d\n",rank);
+	printf("Counting Y: %d \n",rank);
 	start = get_wall_time();
 	count(y,nbound, mbound, t, count_y);
 	time_count_y = get_wall_time() - start; 
 
 	// Adding up all local counts -> global counts 
-	MPI_Reduce(&elem_count_x,&count_x,nranks ,MPI_INT, MPI_SUM, 0, comm);
-	MPI_Reduce(&elem_count_y,&count_y,nranks ,MPI_INT, MPI_SUM, 0, comm);
+	MPI_Reduce(&elem_count_x,&count_x,nranks,MPI_INT, MPI_SUM, 0, comm);
+	MPI_Reduce(&elem_count_y,&count_y,nranks,MPI_INT, MPI_SUM, 0, comm);
+	printf("Counting finished: %d",rank);
 	ierr = MPI_Barrier(comm);
+	
 
 	// ======================================= Output ==========================================
 	// Output by thread 0
